@@ -115,7 +115,8 @@ if __name__ == "__main__":
     loss_fn = mon_loss
     optimizer = torch.optim.Adam([
         {"params": model.parameters()},
-        {"params": ego_encoder.parameters()}
+        {"params": ego_encoder.parameters()},
+        {"params": img_encoder.parameters()}
     ], lr=1e-4)
 
 

@@ -1,5 +1,6 @@
 import torch
 import pytest
+import numpy as np
 
 from my_av.proformer import ProFormer 
 
@@ -73,7 +74,7 @@ def proformer_inputs():
         zmin=0.0,
         zmax=1.0,
         num_points_in_pillar=4,
-        pc_range=torch.tensor([-50, -50, 0., 50., 50., 5.]),
+        pc_range=np.array([-50, -50, 0., 50., 50., 5.], dtype=np.float32),
         extrinsics=extrinsics,
         intrinsics=intrinsics
     )

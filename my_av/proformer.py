@@ -94,6 +94,7 @@ class ProFormerLayer(nn.Module):
             ProposalDeformableSelfAttention(embed_dim=embed_dim,
                                             num_heads=num_heads,
                                             num_points=num_points),
+            nn.LayerNorm(embed_dim),
             ProposalSpatialCrossAttention(embed_dim=embed_dim,
                                           num_heads=num_heads,
                                           num_levels=num_levels,
@@ -121,24 +122,26 @@ class ProFormerLayer(nn.Module):
         # Temporal Self-Attention
         queries = self.layers[0](queries, proposals[..., :2], query_pos=bev_pos) # (B, N, T, C)
 
+        # norm
+        queries = self.layers[1](queries)
 
         # Spatial Cross-Attention
         identity = queries # residual connection
         img_coords, mask_view = proposal_to_anchor(proposals.cpu(), **kwargs) # (B, N, T, 4, num_points_in_pillar, D, 2), (B, N, T, D)
-        queries = self.layers[1](queries,
+        queries = self.layers[2](queries,
                                  img_coords.to(queries.device),
                                  image_feats, 
                                  mask_view=mask_view.to(queries.device), 
                                  identity=identity) # (B, N, T, C)
 
         # norm
-        queries = self.layers[2](queries)
+        queries = self.layers[3](queries)
 
         # FFN
         identity = queries # residual connection
-        queries = self.layers[3](queries, identity=identity) # (B, N, T, C)
+        queries = self.layers[4](queries, identity=identity) # (B, N, T, C)
 
         # norm
-        queries = self.layers[4](queries)
+        queries = self.layers[5](queries)
 
         return queries, proposals
