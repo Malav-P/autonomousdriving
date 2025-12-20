@@ -1,2 +1,6 @@
 __pycache__/
 *.pyc
+todo.txt
+*.egg-info
+bev_plots
+dataset.py

@@ -2,9 +2,7 @@ import pytest
 import numpy as np
 
 from physical_ai_av.dataset import PhysicalAIAVDatasetInterface
-from my_av.utils.nvav_dataset_interface import _get_gt_proposals, _get_ego_features, _get_mean_timestamp, NVAVDataset
-
-
+from my_av.utils.nvav_dataset_interface import _get_gt_proposals, _get_ego_features, _get_mean_timestamp, _add_turn_lead, NVAVDataset
 
 # --- Fixtures -------------------------------------------------------------
 @pytest.fixture
@@ -97,3 +95,28 @@ def test_nvav_dataset_basic():
     item = dataset[0]
 
     assert item["image_features"][0].shape[:2] == (dataset.num_frames_to_choose, 3) # should be (N, 3, H, W)
+
+def test_add_turn_lead():
+    np.random.seed(42)
+    N = 700
+
+    # Start with zeros
+    nav_goal = np.zeros(N, dtype=int)
+
+    # Add some left turns (+1)
+    nav_goal[100:150] = 1    # 50 samples → valid
+    nav_goal[300:320] = 1    # 20 samples → too short, should be ignored
+    nav_goal[500:540] = 1    # 40 samples → valid
+
+    # Add some right turns (-1)
+    nav_goal[200:250] = -1   # 50 samples → valid
+    nav_goal[600:615] = -1   # 15 samples → too short, ignored
+
+    # Apply lead function
+    nav_goal_lead = _add_turn_lead(nav_goal, min_len=30, lead=30)
+
+    assert (nav_goal_lead[70:150] == 1).all()
+    assert (nav_goal_lead[270:300] == 0).all()
+    assert (nav_goal_lead[470:540] == 1).all()
+    assert (nav_goal_lead[170:250] == -1).all()
+    assert (nav_goal_lead[570:600] == 0).all()

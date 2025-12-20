@@ -140,7 +140,7 @@ class MSDeformableAttention(nn.Module):
             # Reshape sampling locations for each head
             # (B, Len_q, num_heads, num_points, 2) -> (B, num_heads, Len_q, num_points, 2) 
             sampling_grid = sampling_locations.permute(0, 2, 1, 3, 4)  
-            # (B, num_heads, Len_q, num_points, 2) -> (B * num_heads, Len_q * num_points, 1, 2)
+            # (B, num_heads, Len_q, num_points, 2) -> (B * num_heads, Len_q, num_points, 2)
             sampling_grid = sampling_grid.reshape(B * num_heads, Len_q, self.num_points, 2)
 
             # convert [0,1] to [-1,1]
@@ -162,7 +162,7 @@ class MSDeformableAttention(nn.Module):
             # (B, num_heads, head_dim, Len_q, num_points) -> (B, Len_q, num_heads, num_points, head_dim)
             sampled = sampled.permute(0, 3, 1, 4, 2)
 
-            # attention weights for this level: (B, Len_q, num_heads, num_points)
+            # attention weights for this level
             attn = attention_weights[:, :, :, lvl, :]  # (B, Len_q, num_heads, num_points)
             attn = attn.unsqueeze(-1)  # (B, Len_q, num_heads, num_points, 1)
             # weighted sum across points
