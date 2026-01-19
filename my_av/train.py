@@ -3,7 +3,17 @@ import numpy as np
 from torch.utils.data import DataLoader
 from my_av.loss import mon_loss
 
-def train(model, ego_encoder, img_encoder, dataset, optimizer, loss_fn, epochs=10, batch_size=1, device="cuda"):
+from torchvision.transforms import v2
+
+transform = v2.Compose(
+    [
+        v2.Resize((432, 768)),
+        v2.ToDtype(torch.float32, scale=True),
+        v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        ]
+)
+
+def train(model, ego_encoder, img_encoder, dataset, optimizer, loss_fn, epochs=10, batch_size=1, device="cuda", accum_iter=1):
     # Move model to the device
     model.to(device)
     model.train()
@@ -14,13 +24,13 @@ def train(model, ego_encoder, img_encoder, dataset, optimizer, loss_fn, epochs=1
     img_encoder.train()
 
     # Data loader
-    loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, collate_fn=nvav_collator)
+    loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, collate_fn=nvav_collator, num_workers=1)
 
 
     for epoch in range(epochs):
         total_loss = 0.0
 
-        for batch in loader:
+        for batch_idx, batch in enumerate(loader):
             # Unpack batch (common case: (inputs, targets))
             vel_ego, acc_ego, nav_goal = batch["ego_features"] # (B*N, 3) (B*N, 3) (B*N,)
             img_feats = batch["image_features"]
@@ -28,7 +38,6 @@ def train(model, ego_encoder, img_encoder, dataset, optimizer, loss_fn, epochs=1
             extrinsics = batch["extrinsics"] # (B, D, 7)
             intrinsics = batch["intrinsics"] # (B, D, 9)
             vdims = batch["vehicle_dims"] # (B, 3), each row (length, width, rear_axle_to_bbox_center)
-
             
             kwargs = dict(
                         half_length=vdims[:, 0]/2,
@@ -44,22 +53,31 @@ def train(model, ego_encoder, img_encoder, dataset, optimizer, loss_fn, epochs=1
 
             ego = torch.cat([vel_ego[:, :2], acc_ego[:, :2], nav_goal], dim=-1).to(device) # shape -> (B, 7)
 
-            print("Begin forward...")
             ego_feats = ego_encoder(ego)
 
             for cam, img_feat in enumerate(img_feats):
-                img_feats[cam] = img_encoder(img_feat.to(device))
+                img_feat = transform(img_feat.to(device))
+                img_feats[cam] = img_encoder(img_feat)
 
             # Forward pass
-            outputs, proposals = model(ego_feats, img_feats, **kwargs)
+            with torch.autograd.set_detect_anomaly(True):
 
-            loss = loss_fn(proposals, gt_proposals, lambda_val=0.1)
+                outputs, proposals = model(ego_feats, img_feats, **kwargs)
 
-            # Backward pass
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            print("End backward...")
+                loss = loss_fn(proposals, gt_proposals, lambda_val=0.1)
+                loss = loss / accum_iter
+
+                # with torch.autograd.detect_anomaly():
+                loss.backward()
+
+            print(loss.item())
+
+
+            if ((batch_idx + 1) % accum_iter == 0) or (batch_idx + 1 == len(loader)):
+                optimizer.step()
+                optimizer.zero_grad()
+                print("\n")
+
             
 
             # total_loss += loss.item()
@@ -109,7 +127,7 @@ if __name__ == "__main__":
     img_encoder = ImageEncoder(backbone_name=backbone_name,
                          out_indices=out_indices,
                          fpn_out_channels=fpn_out_channels,
-                         pretrained=False)
+                         pretrained=True)
     ego_encoder = EgoMotionEncoder(num_input_features=7, num_output_features=C)
     dataset = NVAVDataset(camera_names=camera_names, dt=dt, T=T, pc_range=pc_range)
     loss_fn = mon_loss
@@ -120,5 +138,11 @@ if __name__ == "__main__":
     ], lr=1e-4)
 
 
-    train(model=model, ego_encoder=ego_encoder, img_encoder=img_encoder, dataset=dataset, optimizer=optimizer, loss_fn=loss_fn)
+    train(model=model,
+          ego_encoder=ego_encoder,
+          img_encoder=img_encoder,
+          dataset=dataset,
+          optimizer=optimizer,
+          loss_fn=loss_fn,
+          accum_iter=4)
     
