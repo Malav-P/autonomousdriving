@@ -24,7 +24,7 @@ def train(model, ego_encoder, img_encoder, dataset, optimizer, loss_fn, epochs=1
     img_encoder.train()
 
     # Data loader
-    loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, collate_fn=nvav_collator, num_workers=1)
+    loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, collate_fn=nvav_collator, num_workers=0)
 
 
     for epoch in range(epochs):
@@ -58,17 +58,17 @@ def train(model, ego_encoder, img_encoder, dataset, optimizer, loss_fn, epochs=1
             for cam, img_feat in enumerate(img_feats):
                 img_feat = transform(img_feat.to(device))
                 img_feats[cam] = img_encoder(img_feat)
-
+            
             # Forward pass
-            with torch.autograd.set_detect_anomaly(True):
+            # with torch.autograd.set_detect_anomaly(True):
 
-                outputs, proposals = model(ego_feats, img_feats, **kwargs)
+            outputs, proposals = model(ego_feats, img_feats, **kwargs)
 
-                loss = loss_fn(proposals, gt_proposals, lambda_val=0.1)
-                loss = loss / accum_iter
+            loss = loss_fn(proposals, gt_proposals, lambda_val=0.1)
+            loss = loss / accum_iter
 
-                # with torch.autograd.detect_anomaly():
-                loss.backward()
+            # with torch.autograd.detect_anomaly():
+            loss.backward()
 
             print(loss.item())
 
@@ -86,11 +86,17 @@ def train(model, ego_encoder, img_encoder, dataset, optimizer, loss_fn, epochs=1
 
 
 if __name__ == "__main__":
-    from my_av.utils.nvav_dataset_interface import NVAVDataset, nvav_collator
+    from physical_ai_av.dataset import PhysicalAIAVDatasetInterface
+    from my_av.utils.nvav_dataset_interface import NVAVDataset, FrameDecoder, nvav_collator
     from my_av.proformer import ProFormer
     from my_av.encoders import EgoMotionEncoder, ImageEncoder
 
     camera_names = ["camera_cross_left_120fov", "camera_cross_right_120fov", "camera_front_wide_120fov"]
+
+    # Initialize the frame decoder
+    ds_interface = PhysicalAIAVDatasetInterface(token=True)
+    decoder = FrameDecoder(ds_interface, camera_names=camera_names)
+    decoder.start()
 
     N = 64      # num proposals
     T = 6      # forecast steps
@@ -129,7 +135,7 @@ if __name__ == "__main__":
                          fpn_out_channels=fpn_out_channels,
                          pretrained=True)
     ego_encoder = EgoMotionEncoder(num_input_features=7, num_output_features=C)
-    dataset = NVAVDataset(camera_names=camera_names, dt=dt, T=T, pc_range=pc_range)
+    dataset = NVAVDataset(ds_interface=ds_interface, camera_names=camera_names, dt=dt, T=T, pc_range=pc_range, frame_decoder=decoder, prefetch_size=8)
     loss_fn = mon_loss
     optimizer = torch.optim.Adam([
         {"params": model.parameters()},
@@ -145,4 +151,7 @@ if __name__ == "__main__":
           optimizer=optimizer,
           loss_fn=loss_fn,
           accum_iter=4)
+    
+
+    decoder.stop()
     
