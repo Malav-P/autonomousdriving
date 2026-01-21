@@ -91,6 +91,9 @@ if __name__ == "__main__":
     from my_av.proformer import ProFormer
     from my_av.encoders import EgoMotionEncoder, ImageEncoder
 
+    np.random.seed(42)
+    torch.manual_seed(42)
+
     camera_names = ["camera_cross_left_120fov", "camera_cross_right_120fov", "camera_front_wide_120fov"]
 
     # Initialize the frame decoder
@@ -103,6 +106,8 @@ if __name__ == "__main__":
     C = 256     # embed dim
     L = 4      # num layers
     D = 3      # num cameras
+
+    accum_iter = 2  # gradient accumulation steps
 
     dt = 0.5 * 1e6  # 0.5 seconds in microseconds
 
@@ -150,7 +155,7 @@ if __name__ == "__main__":
           dataset=dataset,
           optimizer=optimizer,
           loss_fn=loss_fn,
-          accum_iter=4)
+          accum_iter=accum_iter)
     
 
     decoder.stop()

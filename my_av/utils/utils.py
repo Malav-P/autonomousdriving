@@ -16,15 +16,16 @@ def proposal_to_anchor(proposals: torch.tensor,
                            half_width=half_width,
                            half_length=half_length,
                            rear_axle_to_center=rear_axle_to_center) # (B, N, T, 4, 2)
-
+    
     reference_points = _lift_corners(corners=corners,
                                      zmin=zmin,
                                      zmax=zmax,
                                      num_points_in_pillar=num_points_in_pillar) # (B, N, T, 4, num_points_in_pillar, 3)
 
-    pc_range = torch.tensor(pc_range)
+    pc_range = torch.tensor(pc_range, device=proposals.device)
     world_coords = bev_to_world(bev_coords=reference_points,
                                 pc_range=pc_range) # (B, N, T, 4, num_points_in_pillar, 3)
+    
 
     img_coords, mask = world_to_image_ftheta(world_coords=world_coords,
                                              intrinsics=intrinsics,
@@ -59,7 +60,7 @@ def _get_corners(proposals: torch.tensor,
 
     _, num_frames, *batch_shape, _ = proposals.shape
 
-    corners = torch.empty(size=(B, num_frames, *batch_shape, 4, 2))
+    corners = torch.empty(size=(B, num_frames, *batch_shape, 4, 2), device=proposals.device)
 
     for b in range(B):
         x, y, headings = proposals[b, ..., 0], proposals[b, ..., 1], proposals[b, ..., 2]
@@ -110,7 +111,8 @@ def _lift_corners(corners: torch.tensor,
     zs = torch.linspace(
         zmin,
         zmax,
-        steps=num_points_in_pillar
+        steps=num_points_in_pillar,
+        device=corners.device
     )
 
     # Expand z to match corners
@@ -171,17 +173,18 @@ def world_to_image_ftheta(world_coords: torch.tensor,
     world_coords = world_coords.view(B, -1, *world_coords.shape[1:]) # (B, num_frames, ..., 3)
     _, num_frames, *batch_shape, _ = world_coords.shape
 
-    bev_masks = torch.empty(size=(B, num_frames, *batch_shape, D, 1), dtype=torch.bool)
-    img_pts = torch.empty(size=(B, num_frames, *batch_shape, D, 2))
+    bev_masks = torch.empty(size=(B, num_frames, *batch_shape, D, 1), dtype=torch.bool, device=world_coords.device)
+    img_pts = torch.empty(size=(B, num_frames, *batch_shape, D, 2), device=world_coords.device)
 
     for b in range(B):
         w_coords = world_coords[b]
         for cam in range(D):
-            qx, qy, qz, qw, x, y, z = extrinsics[b, cam]
+            q = extrinsics[b, cam, :4]
+            
             w, h, cx, cy, k0, k1, k2, k3, k4 = intrinsics[b, cam]
 
-            R = torch.tensor(quat_to_rotmat([qw, qx, qy, qz])) # (3, 3)
-            t = torch.tensor([x, y, z])
+            R = quat_to_rotmat(q) # (3, 3)
+            t = extrinsics[b, cam, 4:]
 
             # Transform world coords to camera frame
             cam_coords = (w_coords - t) @ R  # (..., 3)
@@ -195,7 +198,7 @@ def world_to_image_ftheta(world_coords: torch.tensor,
 
             norm = torch.sqrt(X**2 + Y**2 + Z**2)
             norm_safe = torch.where(norm < eps, torch.tensor(1.0), norm)
-            cos_theta = torch.clamp(Z / norm_safe, -1.0, 1.0)  # valid acos domain
+            cos_theta = torch.clamp(Z / norm_safe, -1 + 1e-4, 1 - 1e-4)  # valid acos domain with safe handling of edges
             theta = torch.acos(cos_theta)
 
             ftheta = k0 + k1 * theta + k2 * theta**2 + k3 * theta**3 + k4 * theta**4 # (...,)
@@ -259,8 +262,8 @@ def world_to_image_pinhole(world_coords: torch.tensor,
     ones = torch.ones_like(world_coords[..., :1]) # (..., 1)
     homogenous_world_coords = torch.cat([world_coords, ones], dim=-1) # (..., 4)
 
-    image_coords = torch.empty(size=(*batch_shape, D, 2))
-    bev_masks = torch.empty(size=(*batch_shape, D, 1))
+    image_coords = torch.empty(size=(*batch_shape, D, 2), device=world_coords.device)
+    bev_masks = torch.empty(size=(*batch_shape, D, 1), device=world_coords.device)
 
     for i, camera in enumerate(cameras):
         homo_img_coords = homogenous_world_coords @ camera.T # (..., 3) each 3-vector is of the form z (x, y, 1)
@@ -284,7 +287,6 @@ def world_to_image_pinhole(world_coords: torch.tensor,
         
         image_coords[..., i, :] = image_coords_i[..., :2] # (..., 2)
         bev_masks[..., i, :] = bev_mask
-
     return image_coords, bev_masks
       
 
@@ -292,11 +294,11 @@ def world_to_image_pinhole(world_coords: torch.tensor,
 def quat_to_rotmat(q):
     """Convert quaternion [qw, qx, qy, qz] to rotation matrix."""
     qw, qx, qy, qz = q
-    R = np.array([
+    R = torch.tensor([
         [1 - 2*(qy*qy + qz*qz),     2*(qx*qy - qz*qw),     2*(qx*qz + qy*qw)],
         [    2*(qx*qy + qz*qw), 1 - 2*(qx*qx + qz*qz),     2*(qy*qz - qx*qw)],
         [    2*(qx*qz - qy*qw),     2*(qy*qz + qx*qw), 1 - 2*(qx*qx + qy*qy)]
-    ], dtype=np.float32)
+    ], dtype=torch.float32, device=q.device)
     return R
 
 def rotation_to_heading(R):

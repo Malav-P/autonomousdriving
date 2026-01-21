@@ -20,13 +20,15 @@ class FrameDecoder:
                  dataset_interface,
                  camera_names: list,
                  cache_dir: str = "./frame_cache",
-                 max_queue_size: int = 100):
+                 max_queue_size: int = 100,
+                 num_frames_to_choose: int = 32):
         """
         Args:
             dataset_interface: PhysicalAIAVDatasetInterface instance
             camera_names: list of camera names to decode
             cache_dir: directory to cache decoded frames
             max_queue_size: maximum number of clip_ids to queue for decoding
+            num_frames_to_choose: number of frames to decode per clip
         """
         self.ds = dataset_interface
         self.camera_names = camera_names
@@ -45,6 +47,10 @@ class FrameDecoder:
         # Control flags
         self.running = False
         self.thread = None
+
+        # misc parameters
+        self.num_frames_to_choose = num_frames_to_choose
+        self.fps = 30
         
     def start(self):
         """Start the producer thread"""
@@ -142,10 +148,10 @@ class FrameDecoder:
                 camera_readers.append(reader)
             
             # Get all frame indices
-            n_frames = len(camera_readers[0].timestamps) - int((0.5) * 6 * 30) #self.dt/1e6 * self.T * self.fps
+            n_frames = len(camera_readers[0].timestamps) - int((0.5) * 6 * self.fps) #self.dt/1e6 * self.T * self.fps
             
-            start_idx = np.random.randint(0, n_frames - 16)
-            frame_indices = np.arange(start_idx, start_idx + 16, dtype=int)
+            start_idx = np.random.randint(0, n_frames - self.num_frames_to_choose)
+            frame_indices = np.arange(start_idx, start_idx + self.num_frames_to_choose, dtype=int)
         
             # Decode all frames from all cameras and collect timestamps
             decoded_frames = []
@@ -447,155 +453,6 @@ def nvav_collator(batch):
         "vehicle_dims": vdims
     }
 
-# class NVAVDataset(Dataset):
-#     def __init__(self,
-#                  camera_names: list,
-#                  dt: float, T: int,
-#                  kappa_epsilon: float = 1e-3,
-#                  pc_range: np.ndarray = None
-#                  ):
-#         """
-#         Dataset Class for interfacing with the Nvidia Autonomous vehicles dataset
-
-#         Args:
-#             camera_names: list of camera names that will be used.
-#             dt: time interval between sampled future timestamps in microseconds
-#             T: int, number of future time stamps to sample
-#             kappa_epsilon : threshold to determine whether a turn is happening
-#             pc_range (np.ndarray) array xmin, ymin, zmin, xmax, ymax, zmax containing point cloud ranges. If passed, velocity and ego will be linearly scaled
-#                               to [-1, 1] using these scales
-
-#         """
-#         self.ds = PhysicalAIAVDatasetInterface(token=True)
-
-#         self.camera_names = camera_names
-#         self.kappa_epsilon = kappa_epsilon
-#         self.pc_range = pc_range
-#         self.dt = dt
-#         self.T = T
-
-#         self.fps = 30
-#         self.downsample = 0.4
-#         self.num_frames_to_choose = 16
-
-#     def __len__(self):
-#         # number of clips
-#         return len(self.ds.clip_index.index)
-
-#     def __getitem__(self, idx):
-#         """
-#         Docstring for __getitem__
-        
-#         Returns:
-#             vel_ego (np.ndarray) (1, 3)
-#             acc_ego (np.ndarray) (1, 3)
-#             nav_goal (np.ndarray) (1,)
-
-#             image_features ( list(torch.tensor) ), each item in list is shape (B, 3, H_i, W_i). This tensor is normalized according to imagenet mean and std
-
-#             gt_proposals (np.ndarray) (1, T, 3) array of ground truth proposal trajectories
-#         """
-#         # print("A")
-#         clip_id = self.ds.clip_index.index[idx]
-#         chunk_id = self.ds.get_clip_chunk(clip_id)
-
-#         all_available = self.ds.chunk_sensor_presence.loc[chunk_id, self.camera_names].all()
-
-#         if not all_available:
-#             raise RuntimeError(f"Chunk ID {chunk_id} does not have all requested camera views present")
-
-#         try:
-#             # test to see if data is downloaded
-#             self.ds.get_clip_feature(clip_id, "vehicle_dimensions", maybe_stream=False)
-#         except FileNotFoundError:
-
-#             # Path to the dataset cache
-#             cache_path = Path.home() / ".cache" / "huggingface" / "hub" / "datasets--nvidia--PhysicalAI-Autonomous-Vehicles"
-
-#             # Remove the directory if it exists
-#             if cache_path.exists() and cache_path.is_dir():
-#                 shutil.rmtree(cache_path)
-#                 print(f"Removed cache directory: {cache_path}")
-#             else:
-#                 print(f"Cache directory does not exist: {cache_path}")
-
-#             self.ds.download_clip_features(clip_id, self.camera_names + ["egomotion", "sensor_extrinsics", "camera_intrinsics", "vehicle_dimensions"])
-        
-#         # print("B")
-#         camera_readers = []
-#         for camera_name in self.camera_names:
-#             camera_readers.append(self.ds.get_clip_feature(clip_id, camera_name, maybe_stream=False, use_torch_codec=True))
-
-#         camera_readers = tuple(camera_readers)
-#         ego_reader = self.ds.get_clip_feature(clip_id, "egomotion", maybe_stream=False)
-
-#         n_frames = len(camera_readers[0].timestamps) - (self.dt / 1e6) * self.T * self.fps # ensure that we dont pick a frame that is too close to the end where we cant forecast T steps into the future
-
-#         # ### OPTION 1, RANDOMLY SAMPLE 16 frames frames
-#         # frame_idx = np.random.randint(0, n_frames, size=self.num_frames_to_choose)
-
-#         ### OPTION 2, RANDOMLY SAMPLE 16 consecutive frames somewhere in the clip, FASTER
-#         start_idx = np.random.randint(0, n_frames-self.num_frames_to_choose)
-#         frame_idx = np.arange(start_idx, start_idx + self.num_frames_to_choose, dtype=int)
-
-
-#         timestamps = _get_mean_timestamp(frame_idx=frame_idx, camera_readers=camera_readers)
-
-#         # ego features
-#         vel_ego, acc_ego, nav_goal = _get_ego_features(timestamps=timestamps,
-#                                                        reader=ego_reader,
-#                                                        kappa_epsilon=self.kappa_epsilon,
-#                                                        pc_range=self.pc_range)
-
-#         # convert nav_goal to one-hot
-#         indices = nav_goal + 1
-#         one_hot_nav_goal = np.eye(3, dtype=np.float32)[indices]
-        
-#         # print("C")
-#         # image features
-#         frames = []
-#         for reader in camera_readers:
-#             frame = reader.decode_images_from_frame_indices(frame_idx) # (N, H, W, C)
-
-#             frame = frame.transpose(0, 3, 1, 2) # (N, C, H, W)
-            
-#             frames.append(frame) 
-
-#             reader.close()
-
-
-#         # print("D")
-#         # camera intrinsics, extrinsics, and vehicle dimensions
-#         reader = self.ds.get_clip_feature(clip_id, "sensor_extrinsics", maybe_stream=False)
-#         extrinsics = reader.loc[self.camera_names].to_numpy().astype(np.float32) # each row qx, qy, qz, qw, x, y, z
-
-#         reader = self.ds.get_clip_feature(clip_id, "camera_intrinsics", maybe_stream=False)
-#         intrinsics = reader.loc[self.camera_names, ["width", "height", "cx", "cy", "fw_poly_0","fw_poly_1",  "fw_poly_2",  "fw_poly_3",  "fw_poly_4"]].to_numpy()
-        
-#         reader = self.ds.get_clip_feature(clip_id, "vehicle_dimensions", maybe_stream=False)
-#         vehicle_dims = reader.loc[["length", "width", "rear_axle_to_bbox_center"]].to_numpy()
-        
-#         if self.pc_range is not None:
-#             # scale to [-1, 1]
-#             xmin, ymin, zmin, xmax, ymax, zmax = self.pc_range
-#             vehicle_dims[[0, 2]] = 2* (vehicle_dims[[0, 2]] - xmin) / (xmax - xmin) - 1.0
-#             vehicle_dims[1] = 2* (vehicle_dims[1] - ymin) / (ymax - ymin) - 1.0
-
-        
-#         # ground truth trajectories
-#         gt_proposals = _get_gt_proposals(timestamps=timestamps,
-#                                          egomotion_reader=ego_reader,
-#                                          dt=self.dt,
-#                                          T=self.T,
-#                                          pc_range=self.pc_range)
-
-#         return {"ego_features": (vel_ego, acc_ego, one_hot_nav_goal),
-#                 "image_features": frames,
-#                 "gt_proposals": gt_proposals,
-#                 "extrinsics": extrinsics,
-#                 "intrinsics": intrinsics,
-#                 "vehicle_dims": vehicle_dims,
-#                 }
 
 def _add_turn_lead(nav_goal: np.ndarray, min_len: int=30, lead: int=30):
     """
@@ -704,30 +561,6 @@ def _get_ego_features(timestamps: np.ndarray,
     return velocity_ego.astype(np.float32), acceleration_ego.astype(np.float32), nav_goal
 
 
-# def _get_mean_timestamp(frame_idx: np.ndarray,
-#                         camera_readers: tuple):
-#     """
-#     Given a frame index and multiple camera views, get the timestamp associated with the frame. Since different camera views may have slightly
-#     different timestamps for a frame, they are average across cameras.
-    
-#     Args:
-#         frame_idx: np.ndarray of shape (B,) representing frames we are querying
-#         camera_readers: tuple of cameras from which to get timestamps
-
-#     Returns:
-#         np.ndarray (float) of shape (B,) containing timestamps of the frames
-#     """
-
-#     n_readers = len(camera_readers)
-#     B = frame_idx.shape[0]
-
-#     # average timestamps across all cameras
-#     timestamps = np.empty(shape=(B, n_readers))
-#     for i, reader in enumerate(camera_readers):
-#         timestamps[:, i] = reader.timestamps[frame_idx]
-#     timestamps = timestamps.mean(axis=-1) # (B,)
-
-#     return timestamps
 
 def _get_gt_proposals(timestamps: np.ndarray,
                      egomotion_reader,

@@ -65,7 +65,7 @@ class ProFormer(nn.Module):
 
         _, N, T, _ = queries.shape
         K = len(self.layers)
-        props = torch.empty(size=(B, K, N, T, 3))
+        props = torch.empty(size=(B, K, N, T, 3), device=queries.device)
         for k, layer in enumerate(self.layers):
             queries, proposals = layer(queries=queries,
                                        image_feats=image_feats,
@@ -118,7 +118,6 @@ class ProFormerLayer(nn.Module):
                 **kwargs):
 
         proposals = self.mlp(queries) # (B, N, T, 3)
-
         # Temporal Self-Attention
         queries = self.layers[0](queries, proposals[..., :2], query_pos=bev_pos) # (B, N, T, C)
 
@@ -127,11 +126,11 @@ class ProFormerLayer(nn.Module):
 
         # Spatial Cross-Attention
         identity = queries # residual connection
-        img_coords, mask_view = proposal_to_anchor(proposals.cpu(), **kwargs) # (B, N, T, 4, num_points_in_pillar, D, 2), (B, N, T, D)
+        img_coords, mask_view = proposal_to_anchor(proposals, **kwargs) # (B, N, T, 4, num_points_in_pillar, D, 2), (B, N, T, D)
         queries = self.layers[2](queries,
-                                 img_coords.to(queries.device),
+                                 img_coords,
                                  image_feats, 
-                                 mask_view=mask_view.to(queries.device), 
+                                 mask_view=mask_view, 
                                  identity=identity) # (B, N, T, C)
 
         # norm
